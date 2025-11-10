@@ -61,6 +61,14 @@ function VerifyLogs($snarioName, $snarioId, $strtTime)
           #Prints Test Passed for specific scenario as proper scenarioID was found.
           TestOutputMessage $snarioName "Pass" $strtTime
           GenericError $snarioName
+
+         if ($frameProcessingDetails.Count -gt 43) { #new schema with bins for event version 2
+            $numberOfFramesAbove33ms = ($frameProcessingDetails[22], $frameProcessingDetails[23], $frameProcessingDetails[24], $frameProcessingDetails[25] | 
+            ForEach-Object { [int]($_.Trim()) } | 
+            Measure-Object -Sum).Sum
+         } else {
+            $numberOfFramesAbove33ms = $frameProcessingDetails[20].Trim()      
+         }
           
           #Reading log file to get frames Processing time details
           $numberOfFramesAbove33ms = $frameProcessingDetails[20].Trim()
@@ -345,7 +353,13 @@ function VerifyAudioBlurLogs($snarioName, $snarioId)
              CheckInitTimePCOnly $snarioName $snarioId
                           
              #Reading log file to get frames Processing time details
-             $numberOfFramesAbove33msforAudioBlur = $frameProcessingDetails[20].Trim()
+            if ($frameProcessingDetails.Count -gt 43) { #new schema with bins for event version 2
+               $numberOfFramesAbove33msforAudioBlur = ($frameProcessingDetails[22], $frameProcessingDetails[23], $frameProcessingDetails[24], $frameProcessingDetails[25] | 
+               ForEach-Object { [int]($_.Trim()) } | 
+               Measure-Object -Sum).Sum
+            } else {
+               $numberOfFramesAbove33msforAudioBlur = $frameProcessingDetails[20].Trim()      
+            }
              $minProcessingTimePerFrameforAudioBlur = [math]::round(($frameProcessingDetails[12]/1000000),2)
              $avgProcessingTimePerFrameforAudioBlur = [math]::round(($frameProcessingDetails[11]/1000000),2)
              $maxProcessingTimePerFrameforAudioBlur = [math]::round(($frameProcessingDetails[13]/1000000),2)
@@ -405,10 +419,16 @@ function CheckMemoryUsage($snarioName)
       { 
          #Check memory usage for each PerceptionSessionUsageStats
          $frameProcessingDetails = ($frameProcessingDetailsAll[$i]) -split ","
-         $privateUsage = ($frameProcessingDetails[29].TrimStart(" {")) /1000000
-         $peakWorkingSetSize = ($frameProcessingDetails[30].Trim())/1000000
-         $pageFaultCount = $frameProcessingDetails[31].Trim()
-         $avgWorkingSetSize = ($frameProcessingDetails[32].TrimEnd("}"))/1000000
+         $frameProcessingDetailsLength = $frameProcessingDetails.Count
+         if($frameProcessingDetailsLength -gt 43) { # new schema oayload
+            $indexDiff = 5 # account for the 5+ added bins
+         } else {
+            $indexDiff = 0
+         }
+         $privateUsage = ($frameProcessingDetails[29 + $indexDiff].TrimStart(" {")) /1000000
+         $peakWorkingSetSize = ($frameProcessingDetails[30 + $indexDiff].Trim())/1000000
+         $pageFaultCount = $frameProcessingDetails[31 + $indexDiff].Trim()
+         $avgWorkingSetSize = ($frameProcessingDetails[32 + $indexDiff].TrimEnd("}"))/1000000
          $Results.'PeakWorkingSetSize(In MB)' = $peakWorkingSetSize
          $Results.'AvgWorkingSetSize(In MB)'  = $avgWorkingSetSize
                 
