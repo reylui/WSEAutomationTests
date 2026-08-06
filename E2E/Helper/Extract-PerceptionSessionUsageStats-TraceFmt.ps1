@@ -11,7 +11,8 @@
       3) if base has bit 32 set: base - 32
       4) if base has bit 32 set: (base - 32) + LDC_MASK
   - By default we mimic old behavior: keep the LAST match found.
-  - If -FirstMatchOnly is set, we stop at the FIRST match.
+  - If -FirstMatchOnly is set, we select the FIRST match while continuing to scan for
+    correlated events from the same SessionInfo.
 
   Populates fields on the existing $Global:Results object (InitializeTest must create it):
     - PerceptionScenarioId     : requested base scenario
@@ -87,6 +88,8 @@ $Results.'MaxProcessingTimePerFrame(In ms)' = $null
 $Results.'MinProcessingTimePerFrame(In ms)' = $null
 $Results.'PeakWorkingSetSize(In MB)' = $null
 $Results.'AvgWorkingSetSize(In MB)' = $null
+$Results.'timetofirstframe(In secs)' = $null
+$Results.'timetofirstframeForAudio(In secs)' = $null
 
 
 # ---------------------------------------
@@ -131,6 +134,7 @@ $lastScenarioMatched = $null
 $linesScanned = 0
 $jsonLinesSeen = 0
 $matchesFound = 0
+$usageStatsEvents = New-Object System.Collections.Generic.List[object]
 
 foreach ($line in Get-Content -LiteralPath $InputFile) {
     $linesScanned++
@@ -148,16 +152,18 @@ foreach ($line in Get-Content -LiteralPath $InputFile) {
         continue
     }
 
+    $usageStatsEvents.Add($j) | Out-Null
+
     if (-not ($j.PSObject.Properties.Name -contains 'PerceptionScenario')) { continue }
 
     $ps = [int64]$j.PerceptionScenario
     if ($candidates -notcontains $ps) { continue }
 
+    if ($FirstMatchOnly -and $lastMatch) { continue }
+
     $lastMatch = $j
     $lastScenarioMatched = $ps
     $matchesFound++
-
-    if ($FirstMatchOnly) { break }
 }
 
 if (-not $lastMatch) {
@@ -238,8 +244,36 @@ if ($j.PSObject.Properties.Name -contains 'MinimumProcessingTimePerFrameInNanose
         [math]::Round([double]$j.MinimumProcessingTimePerFrameInNanoseconds / 1e6, 2)
 }
 
+$timeToProcessedFrameNs = $null
 if ($j.PSObject.Properties.Name -contains 'TimeToProcessedFrameInNanoseconds') {
-    $timeToFirstFrame = [math]::Round([double]$j.TimeToProcessedFrameInNanoseconds / 1e9, 4)
+    try { $timeToProcessedFrameNs = [double]$j.TimeToProcessedFrameInNanoseconds } catch { $timeToProcessedFrameNs = $null }
+}
+
+# Some camera sessions emit the time-to-first-frame on an earlier usage-stats event,
+# then emit the aggregate scenario event with a zero value. Correlate by SessionInfo
+# so the timing comes from the same Perception session without mixing independent runs.
+if (($null -eq $timeToProcessedFrameNs -or $timeToProcessedFrameNs -le 0) -and
+    ($j.PSObject.Properties.Name -contains 'SessionInfo')) {
+    $matchedSessionInfo = [string]$j.SessionInfo
+
+    foreach ($usageStatsEvent in $usageStatsEvents) {
+        if (-not ($usageStatsEvent.PSObject.Properties.Name -contains 'SessionInfo')) { continue }
+        if ([string]$usageStatsEvent.SessionInfo -ne $matchedSessionInfo) { continue }
+        if (-not ($usageStatsEvent.PSObject.Properties.Name -contains 'TimeToProcessedFrameInNanoseconds')) { continue }
+
+        $candidateTimeToProcessedFrameNs = $null
+        try { $candidateTimeToProcessedFrameNs = [double]$usageStatsEvent.TimeToProcessedFrameInNanoseconds } catch { continue }
+
+        if ($candidateTimeToProcessedFrameNs -gt 0) {
+            $timeToProcessedFrameNs = $candidateTimeToProcessedFrameNs
+            Write-Verbose ("[Extractor] TimeToProcessedFrameInNanoseconds sourced from correlated SessionInfo {0}" -f $matchedSessionInfo)
+            break
+        }
+    }
+}
+
+if ($null -ne $timeToProcessedFrameNs) {
+    $timeToFirstFrame = [math]::Round($timeToProcessedFrameNs / 1e9, 4)
 
     if ($base -eq 512) {
         $Results.'timetofirstframeForAudio(In secs)' = $timeToFirstFrame
